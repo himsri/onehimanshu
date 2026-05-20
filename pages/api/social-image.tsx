@@ -5,8 +5,7 @@ import * as React from 'react'
 import { ImageResponse } from '@vercel/og'
 import type { NextApiRequest, NextApiResponse } from 'next'
 
-import { api, apiHost, rootNotionPageId } from '@/lib/config'
-import { NotionPageInfo } from '@/lib/types'
+export const runtime = 'edge'
 
 // Using Node.js runtime to avoid the 1 MB Edge Function size limit.
 // @vercel/og bundles resvg.simd.wasm (~1.1 MB) which exceeds the Edge limit
@@ -62,15 +61,13 @@ export default async function OGImage(
       <div
         style={{
           position: 'relative',
-          width: '100%',
-          height: '100%',
+          width: 900,
+          height: 465,
           display: 'flex',
           flexDirection: 'column',
-          backgroundColor: '#1F2027',
-          alignItems: 'center',
-          justifyContent: 'center',
-          fontFamily: '"Inter", sans-serif',
-          color: 'black'
+          border: '16px solid rgba(0,0,0,0.3)',
+          borderRadius: 8,
+          zIndex: '1'
         }}
       >
         {pageInfo.image && (
@@ -87,49 +84,59 @@ export default async function OGImage(
 
         <div
           style={{
-            position: 'relative',
-            width: 900,
-            height: 465,
+            width: '100%',
+            height: '100%',
             display: 'flex',
             flexDirection: 'column',
-            border: '16px solid rgba(0,0,0,0.3)',
-            borderRadius: 8,
-            zIndex: '1'
+            justifyContent: 'space-around',
+            backgroundColor: '#fff',
+            padding: 24,
+            alignItems: 'center',
+            textAlign: 'center'
           }}
         >
+          {pageInfo.detail && (
+            <div style={{ fontSize: 32, opacity: 0 }}>{pageInfo.detail}</div>
+          )}
+
           <div
             style={{
-              width: '100%',
-              height: '100%',
-              display: 'flex',
-              flexDirection: 'column',
-              justifyContent: 'space-around',
-              backgroundColor: '#fff',
-              padding: 24,
-              alignItems: 'center',
-              textAlign: 'center'
+              fontSize: 70,
+              fontWeight: 700,
+              fontFamily: 'Inter'
             }}
           >
-            {pageInfo.detail && (
-              <div style={{ fontSize: 32, opacity: 0 }}>{pageInfo.detail}</div>
-            )}
-
-            <div
-              style={{
-                fontSize: 70,
-                fontWeight: 700,
-                fontFamily: 'Inter'
-              }}
-            >
-              {pageInfo.title}
-            </div>
-
-            {pageInfo.detail && (
-              <div style={{ fontSize: 32, opacity: 0.6 }}>
-                {pageInfo.detail}
-              </div>
-            )}
+            {pageInfo.title}
           </div>
+
+          {pageInfo.detail && (
+            <div style={{ fontSize: 32, opacity: 0.6 }}>{pageInfo.detail}</div>
+          )}
+        </div>
+      </div>
+
+      {pageInfo.authorImage && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 47,
+            left: 104,
+            height: 128,
+            width: 128,
+            display: 'flex',
+            borderRadius: '50%',
+            border: '4px solid #fff',
+            zIndex: '5'
+          }}
+        >
+          <img
+            src={pageInfo.authorImage}
+            style={{
+              width: '100%',
+              height: '100%'
+              // transform: 'scale(1.04)'
+            }}
+          />
         </div>
 
         {pageInfo.authorImage && (
@@ -163,13 +170,7 @@ export default async function OGImage(
       fonts: [
         {
           name: 'Inter',
-          data: interRegularFont,
-          style: 'normal',
-          weight: 400
-        },
-        {
-          name: 'Inter',
-          data: interBoldFont,
+          data: interSemiBoldFont,
           style: 'normal',
           weight: 700
         }
@@ -184,4 +185,145 @@ export default async function OGImage(
   res.setHeader('Content-Type', 'image/png')
   res.setHeader('Cache-Control', 'public, max-age=86400, immutable')
   res.end(Buffer.from(buffer))
+}
+
+export async function getNotionPageInfo({
+  pageId
+}: {
+  pageId: string
+}): Promise<
+  | { type: 'success'; data: NotionPageInfo }
+  | { type: 'error'; error: PageError }
+> {
+  const recordMap = await notion.getPage(pageId)
+
+  const keys = Object.keys(recordMap?.block || {})
+  const block = getBlockValue(recordMap?.block?.[keys[0]!])
+
+  if (!block) {
+    throw new Error('Invalid recordMap for page')
+  }
+
+  const blockSpaceId = block.space_id
+
+  if (
+    blockSpaceId &&
+    libConfig.rootNotionSpaceId &&
+    blockSpaceId !== libConfig.rootNotionSpaceId
+  ) {
+    return {
+      type: 'error',
+      error: {
+        statusCode: 400,
+        message: `Notion page "${pageId}" belongs to a different workspace.`
+      }
+    }
+  }
+
+  const isBlogPost =
+    block.type === 'page' && block.parent_table === 'collection'
+  const title = getBlockTitle(block, recordMap) || libConfig.name
+
+  const imageCoverPosition =
+    (block as PageBlock).format?.page_cover_position ??
+    libConfig.defaultPageCoverPosition
+  const imageObjectPosition = imageCoverPosition
+    ? `center ${(1 - imageCoverPosition) * 100}%`
+    : undefined
+
+  const imageBlockUrl = mapImageUrl(
+    getPageProperty<string>('Social Image', block, recordMap) ||
+      (block as PageBlock).format?.page_cover,
+    block
+  )
+  const imageFallbackUrl = mapImageUrl(libConfig.defaultPageCover, block)
+
+  const blockIcon = getBlockIcon(block, recordMap)
+  const authorImageBlockUrl = mapImageUrl(
+    blockIcon && isUrl(blockIcon) ? blockIcon : undefined,
+    block
+  )
+  const authorImageFallbackUrl = mapImageUrl(libConfig.defaultPageIcon, block)
+  const [authorImage, image] = await Promise.all([
+    getCompatibleImageUrl(authorImageBlockUrl, authorImageFallbackUrl),
+    getCompatibleImageUrl(imageBlockUrl, imageFallbackUrl)
+  ])
+
+  const author =
+    getPageProperty<string>('Author', block, recordMap) || libConfig.author
+
+  // const socialDescription =
+  //   getPageProperty<string>('Description', block, recordMap) ||
+  //   libConfig.description
+
+  // const lastUpdatedTime = getPageProperty<number>(
+  //   'Last Updated',
+  //   block,
+  //   recordMap
+  // )
+  const publishedTime = getPageProperty<number>('Published', block, recordMap)
+  const datePublished = publishedTime ? new Date(publishedTime) : undefined
+  // const dateUpdated = lastUpdatedTime
+  //   ? new Date(lastUpdatedTime)
+  //   : publishedTime
+  //   ? new Date(publishedTime)
+  //   : undefined
+  const date =
+    isBlogPost && datePublished
+      ? `${datePublished.toLocaleString('en-US', {
+          month: 'long'
+        })} ${datePublished.getFullYear()}`
+      : undefined
+  const detail = date || author || libConfig.domain
+
+  const pageInfo: NotionPageInfo = {
+    pageId,
+    title,
+    image,
+    imageObjectPosition,
+    author,
+    authorImage,
+    detail
+  }
+
+  return {
+    type: 'success',
+    data: pageInfo
+  }
+}
+
+async function isUrlReachable(
+  url: string | undefined | null
+): Promise<boolean> {
+  if (!url) {
+    return false
+  }
+
+  try {
+    await ky.head(url)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function getCompatibleImageUrl(
+  url: string | undefined | null,
+  fallbackUrl: string | undefined | null
+): Promise<string | undefined> {
+  const image = (await isUrlReachable(url)) ? url : fallbackUrl
+
+  if (image) {
+    const imageUrl = new URL(image)
+
+    if (imageUrl.host === 'images.unsplash.com') {
+      if (!imageUrl.searchParams.has('w')) {
+        imageUrl.searchParams.set('w', '1200')
+        imageUrl.searchParams.set('fit', 'max')
+        return imageUrl.toString()
+      }
+    }
+  }
+
+  return image ?? undefined
 }
