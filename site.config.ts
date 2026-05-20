@@ -6,7 +6,7 @@ export default siteConfig({
 
   // if you want to restrict pages to a single notion workspace (optional)
   // (this should be a Notion ID; see the docs for how to extract this)
-  rootNotionSpaceId: null,
+  rootNotionSpaceId: '7a04c9ef-ad87-4b56-b39f-175d49e98445',
 
   // basic site info (required)
   name: 'Himanshu Shrivastava Posrtfolio',
