@@ -1,28 +1,42 @@
-import * as React from 'react'
-import { NextRequest } from 'next/server'
+import { readFileSync } from 'fs'
+import { join } from 'path'
 
+import * as React from 'react'
 import { ImageResponse } from '@vercel/og'
+import type { NextApiRequest, NextApiResponse } from 'next'
 
 import { api, apiHost, rootNotionPageId } from '@/lib/config'
 import { NotionPageInfo } from '@/lib/types'
 
-const interRegularFontP = fetch(
-  new URL('../../public/fonts/Inter-Regular.ttf', import.meta.url)
-).then((res) => res.arrayBuffer())
-
-const interBoldFontP = fetch(
-  new URL('../../public/fonts/Inter-SemiBold.ttf', import.meta.url)
-).then((res) => res.arrayBuffer())
-
+// Using Node.js runtime to avoid the 1 MB Edge Function size limit.
+// @vercel/og bundles resvg.simd.wasm (~1.1 MB) which exceeds the Edge limit
+// on Vercel's Hobby plan. Node.js Serverless Functions have a 50 MB limit.
+//
+// Note: NextRequest / import.meta.url must NOT be used here — both trigger
+// Vercel's automatic Edge runtime detection and override this config.
 export const config = {
   runtime: 'nodejs'
 }
 
-export default async function OGImage(req: NextRequest) {
-  const { searchParams } = new URL(req.url)
-  const pageId = searchParams.get('id') || rootNotionPageId
+// Load fonts from the filesystem at module initialisation time.
+// readFileSync is used instead of fetch(new URL(..., import.meta.url))
+// because import.meta.url is an ES-module pattern that also triggers Edge
+// runtime detection in Next.js 12.
+const interRegularFont = readFileSync(
+  join(process.cwd(), 'public/fonts/Inter-Regular.ttf')
+)
+const interBoldFont = readFileSync(
+  join(process.cwd(), 'public/fonts/Inter-SemiBold.ttf')
+)
+
+export default async function OGImage(
+  req: NextApiRequest,
+  res: NextApiResponse
+) {
+  const pageId = (req.query.id as string) || rootNotionPageId
   if (!pageId) {
-    return new Response('Invalid notion page id', { status: 400 })
+    res.status(400).send('Invalid notion page id')
+    return
   }
 
   const pageInfoRes = await fetch(`${apiHost}${api.getNotionPageInfo}`, {
@@ -32,18 +46,18 @@ export default async function OGImage(req: NextRequest) {
       'content-type': 'application/json'
     }
   })
+
   if (!pageInfoRes.ok) {
-    return new Response(pageInfoRes.statusText, { status: pageInfoRes.status })
+    res.status(pageInfoRes.status).send(pageInfoRes.statusText)
+    return
   }
+
   const pageInfo: NotionPageInfo = await pageInfoRes.json()
   console.log(pageInfo)
 
-  const [interRegularFont, interBoldFont] = await Promise.all([
-    interRegularFontP,
-    interBoldFontP
-  ])
-
-  return new ImageResponse(
+  // ImageResponse returns a Web API Response object. We convert its body to
+  // a Buffer so it can be sent via the Node.js res object.
+  const imageResponse = new ImageResponse(
     (
       <div
         style={{
@@ -67,19 +81,6 @@ export default async function OGImage(req: NextRequest) {
               width: '100%',
               height: '100%',
               objectFit: 'cover'
-              // TODO: satori doesn't support background-size: cover and seems to
-              // have inconsistent support for filter + transform to get rid of the
-              // blurred edges. For now, we'll go without a blur filter on the
-              // background, but Satori is still very new, so hopefully we can re-add
-              // the blur soon.
-
-              // backgroundImage: pageInfo.image
-              //   ? `url(${pageInfo.image})`
-              //   : undefined,
-              // backgroundSize: '100% 100%'
-              // TODO: pageInfo.imageObjectPosition
-              // filter: 'blur(8px)'
-              // transform: 'scale(1.05)'
             }}
           />
         )}
@@ -150,7 +151,6 @@ export default async function OGImage(req: NextRequest) {
               style={{
                 width: '100%',
                 height: '100%'
-                // transform: 'scale(1.04)'
               }}
             />
           </div>
@@ -176,4 +176,12 @@ export default async function OGImage(req: NextRequest) {
       ]
     }
   )
+
+  // Convert the Web API Response body to a Node.js Buffer and send it.
+  // Cast needed because @vercel/og@0.0.19 typings don't expose arrayBuffer()
+  // even though ImageResponse extends the Web API Response at runtime.
+  const buffer = await (imageResponse as unknown as Response).arrayBuffer()
+  res.setHeader('Content-Type', 'image/png')
+  res.setHeader('Cache-Control', 'public, max-age=86400, immutable')
+  res.end(Buffer.from(buffer))
 }
