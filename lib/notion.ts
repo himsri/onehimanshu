@@ -3,7 +3,7 @@ import {
   type SearchParams,
   type SearchResults
 } from 'notion-types'
-import { mergeRecordMaps } from 'notion-utils'
+import { getBlockValue, mergeRecordMaps } from 'notion-utils'
 import pMap from 'p-map'
 import pMemoize from 'p-memoize'
 
@@ -31,7 +31,10 @@ function applyCollectionFiltersAndSort(
   const collectionQuery = recordMap.collection_query || {}
 
   for (const collectionId of Object.keys(collections)) {
-    const schema = (collections[collectionId]?.value as any)?.schema || {}
+    // getBlockValue recursively unwraps the { value: { value: Collection } }
+    // nesting that notion-client produces in the recordMap
+    const collection = getBlockValue(collections[collectionId] as any) as any
+    const schema = collection?.schema || {}
 
     // Find the internal property IDs for "Status" and "Created"
     let statusPropId: string | null = null
@@ -53,7 +56,7 @@ function applyCollectionFiltersAndSort(
       if (!queryResult) continue
 
       // Extract blockIds — handle both flat and grouped result shapes
-      let blockIds: string[] =
+      const blockIds: string[] =
         queryResult?.collection_group_results?.blockIds ||
         queryResult?.blockIds ||
         []
@@ -62,7 +65,8 @@ function applyCollectionFiltersAndSort(
 
       // 1. Filter: keep only rows where Status === "Published"
       const published = blockIds.filter((blockId) => {
-        const block = (recordMap.block?.[blockId] as any)?.value
+        // getBlockValue unwraps the double-nesting on block entries too
+        const block = getBlockValue(recordMap.block?.[blockId] as any) as any
         if (!block) return false
         const statusVal = block.properties?.[statusPropId!]?.[0]?.[0]
         return statusVal === 'Published'
@@ -71,8 +75,8 @@ function applyCollectionFiltersAndSort(
       // 2. Sort by Created date, descending
       if (createdPropId) {
         published.sort((a, b) => {
-          const blockA = (recordMap.block?.[a] as any)?.value
-          const blockB = (recordMap.block?.[b] as any)?.value
+          const blockA = getBlockValue(recordMap.block?.[a] as any) as any
+          const blockB = getBlockValue(recordMap.block?.[b] as any) as any
 
           // Date property format: [["‣", [["d", { start_date: "YYYY-MM-DD" }]]]]
           const dateA: string =
