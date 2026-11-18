@@ -14,6 +14,10 @@ export const notion = new NotionAPI({
   ofetchOptions: {
     headers: {
       'User-Agent': userAgent
-    }
+    },
+    // Notion rate-limits bursts (429); back off and retry instead of failing
+    retry: 4,
+    retryDelay: (ctx) => 1000 * 2 ** (4 - ((ctx.options.retry as number) ?? 0)),
+    retryStatusCodes: [429, 500, 502, 503, 504]
   }
 })
